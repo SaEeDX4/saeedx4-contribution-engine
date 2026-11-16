@@ -1,0 +1,110 @@
+name: Pilot acceptance tests (manual)
+# PILOT ONLY: run manually during Phase 1. Performs the K1 attribution
+# events (direct commit, PR + merge, issue) with the owner's fine-grained
+# PAT; tests V1 (GITHUB_TOKEN GraphQL read), V2 (CI on a PAT-created PR),
+# V3 (cross-repo read) and the PAT scope limit. Evidence is written to
+# ledger/pilot-evidence.md and committed to main as part of K1.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pilot
+  cancel-in-progress: false
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          token: ${{ secrets.AUTOMATION_PAT }}
+          fetch-depth: 0
+      - name: Collect check results (V1, PAT identity, scope, V3)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAT: ${{ secrets.AUTOMATION_PAT }}
+        run: |
+          set +e
+          EV=ledger/pilot-evidence.md
+          {
+            echo "# Pilot evidence"
+            echo
+            echo "- Workflow run: ${{ github.run_id }} (attempt ${{ github.run_attempt }})"
+            echo "- Started (UTC): $(date -u '+%Y-%m-%d %H:%M:%S')"
+            echo
+            echo "## V1 — can GITHUB_TOKEN read the owner's contribution calendar?"
+            gh api graphql -f query='query { user(login: "SaEeDX4") { contributionsCollection { contributionCalendar { totalContributions } } } }' > /tmp/v1.json 2>/tmp/v1.err
+            if [ -s /tmp/v1.json ] && grep -q totalContributions /tmp/v1.json; then
+              echo "V1 RESULT: GITHUB_TOKEN GraphQL read SUCCEEDED: $(cat /tmp/v1.json)"
+            else
+              echo "V1 RESULT: GITHUB_TOKEN GraphQL read FAILED (expected): $(head -c 300 /tmp/v1.err)"
+            fi
+            echo
+            echo "## PAT identity and scope (V3 + security control)"
+            LOGIN=$(curl -s -H "Authorization: Bearer $PAT" https://api.github.com/user | jq -r .login)
+            echo "PAT /user login: $LOGIN"
+            for R in saeedx4-contribution-engine saeedx4-achievement-lab interview-assistant-website; do
+              CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $PAT" https://api.github.com/repos/SaEeDX4/$R)
+              echo "PAT GET repos/SaEeDX4/$R -> HTTP $CODE"
+            done
+            echo "(200 for the two project repos = in scope and cross-repo read works (V3); 404 for interview-assistant-website = correctly out of scope for a fine-grained PAT)"
+          } > "$EV"
+          cat "$EV"
+      - name: Configure git identity (owner noreply)
+        run: |
+          git config user.name "SaEeDX4"
+          git config user.email "198836972+SaEeDX4@users.noreply.github.com"
+      - name: K1a — direct commit to main (pilot evidence ledger)
+        run: |
+          cat >> ledger/pilot-evidence.md <<'EOF'
+
+          ## K1 — attribution events in this run
+          - K1a: this file is committed directly to main by the pilot workflow.
+          - Author: SaEeDX4 <198836972+SaEeDX4@users.noreply.github.com>
+          - Execution: owner's fine-grained PAT (AUTOMATION_PAT secret).
+
+          Automated-By: Muse (owner-authorized pilot, Phase 1)
+          Standing-Authorization: SaEeDX4 Phase 1 approval, 2026-11-16
+          EOF
+          git add ledger/pilot-evidence.md
+          git commit -m "docs(ledger): record pilot evidence (K1, V1, PAT scope)" -m "Automated-By: Muse (owner-authorized pilot, Phase 1)" -m "Run-ID: ${{ github.run_id }}"
+          git push origin main
+          echo "K1a pushed: $(git rev-parse HEAD)"
+      - name: K1b + V2 — branch, PR, CI, merge
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_PAT }}
+        run: |
+          set +e
+          gh label create automation --description "Created by owner-authorized automation" --color 5319e7 --force
+          BR="pilot/k1-report-${{ github.run_id }}"
+          git switch -c "$BR"
+          mkdir -p docs
+          cat > docs/pilot-report.md <<'EOF'
+          # Pilot report (K1b)
+
+          This file was created on a branch, opened as a pull request and merged
+          by the owner-authorized pilot workflow to test attribution (K1) and
+          CI triggering on PAT-created pull requests (V2).
+
+          Automated-By: Muse (owner-authorized pilot, Phase 1)
+          EOF
+          git add docs/pilot-report.md
+          git commit -m "docs: add pilot report (K1b)" -m "Automated-By: Muse (owner-authorized pilot, Phase 1)" -m "Run-ID: ${{ github.run_id }}"
+          git push origin "$BR"
+          PR_URL=$(gh pr create --title "[Pilot] K1b pilot report" --body "Owner-authorized Phase 1 pilot: tests PR attribution (K1) and whether CI runs on a PAT-created PR without manual approval (V2). Automated-By: Muse. Run-ID: ${{ github.run_id }}" --label automation)
+          echo "PR created: $PR_URL"
+          sleep 45
+          echo "PR checks:"; gh pr checks "$PR_URL"
+          echo "Recent runs:"; gh run list --limit 5
+          gh pr merge "$PR_URL" --merge --delete-branch
+          echo "PR merged."
+      - name: K1c — issue opened and closed
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_PAT }}
+        run: |
+          set +e
+          ISSUE_URL=$(gh issue create --title "[Pilot] K1c attribution tracking" --body "Owner-authorized Phase 1 pilot tracking issue. Tests issue attribution (K1). It will be closed by the same pilot run. Automated-By: Muse. Run-ID: ${{ github.run_id }}" --label automation)
+          echo "Issue created: $ISSUE_URL"
+          gh issue close "$ISSUE_URL" --comment "Pilot K1c complete. Closing as designed."
+          echo "Issue closed."
