@@ -1,8 +1,10 @@
 name: PAT scope check (manual, read-only)
-# PILOT ONLY: verifies what the AUTOMATION_PAT can and cannot do, using
-# read-only API calls only. For each repository it prints the permissions
-# GitHub reports for this token. push=false outside the two project repos
-# proves the fine-grained scope limit where it matters: writes.
+# PILOT ONLY: verifies what the AUTOMATION_PAT can reach, read-only.
+# Note: the `permissions` object in GET /repos responses describes the
+# authenticated USER's role on the repo, not the token's scope, so it
+# cannot test a fine-grained PAT. The decisive read-only signal is
+# GET /user/repos: for a fine-grained PAT it lists only the repositories
+# the token was granted access to.
 on:
   workflow_dispatch:
 permissions:
@@ -12,11 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Print PAT permissions per repository
+      - name: List repositories visible to the PAT
         env:
           PAT: ${{ secrets.AUTOMATION_PAT }}
         run: |
-          for R in saeedx4-contribution-engine saeedx4-achievement-lab interview-assistant-website REAL-TIME-WINDOWS-INTERVIEW-ASSISTANT; do
-            echo "== SaEeDX4/$R"
-            curl -s -H "Authorization: Bearer $PAT" "https://api.github.com/repos/SaEeDX4/$R" | jq -c '{full_name, private, permissions}'
-          done
+          echo "== GET /user/repos (owner affiliation) as seen by the PAT:"
+          curl -s -H "Authorization: Bearer $PAT" "https://api.github.com/user/repos?affiliation=owner&per_page=100" | jq -r '.[].full_name'
+          echo "== GET /user:"
+          curl -s -H "Authorization: Bearer $PAT" https://api.github.com/user | jq -c '{login, id}'
