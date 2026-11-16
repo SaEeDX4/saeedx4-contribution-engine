@@ -1,0 +1,29 @@
+name: Profile verification (pilot — report only)
+# Runs ~08:07 / 15:07 / 22:07 America/Vancouver. Pilot mode: checks workflow
+# health of this repository and prints a report. Graph/achievement comparison
+# is enabled during the pilot once the read path (test V1) is decided.
+on:
+  schedule:
+    - cron: "7 8,15,22 * * *"
+      timezone: "America/Vancouver"
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: verify
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: List recent workflow runs (health snapshot)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run list --limit 20 || true
+      - name: Report verification slot
+        run: |
+          echo "Verification slot (America/Vancouver): $(TZ=America/Vancouver date '+%Y-%m-%d %H:%M %Z')"
+          echo "Ledger files present:"; ls -l ledger/ || true
