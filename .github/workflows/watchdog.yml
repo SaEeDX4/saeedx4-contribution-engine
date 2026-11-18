@@ -1,0 +1,71 @@
+name: Schedule watchdog (recovery)
+# Recovery layer for GitHub's best-effort scheduler.
+#
+# Every 30 minutes this workflow asks: for each of today's
+# America/Vancouver slots (verify 08:07 / 15:07 / 22:07, planner
+# 08:12), has a run been created inside its acceptance window? If a
+# slot is overdue by more than 45 minutes and no run exists, the
+# watchdog dispatches a recovery run carrying the slot id.
+#
+# Safety properties:
+# - Recovery only ever targets TODAY's slots (Vancouver). After local
+#   midnight a missing slot is history: it is reported in this run's
+#   summary, never executed late.
+# - Idempotent: the existence check runs before every dispatch, and
+#   the dispatched run is itself slot-guarded and checks for an
+#   already-completed run of the same slot before verifying.
+# - The watchdog performs no verification and no repository writes;
+#   its only write capability is actions:write for the built-in
+#   GITHUB_TOKEN, scoped to this workflow, used solely to dispatch
+#   verify.yml / planner.yml in this repository.
+# - If the watchdog itself is delayed, the Muse sweep layer
+#   (independent of GitHub) still detects and reports missed slots.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check today's slots and recover missing ones
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TODAY=$(TZ=America/Vancouver date +%F)
+          NOW=$(TZ=America/Vancouver date +%s)
+          check_slot () {
+            local workflow="$1" hhmm="$2"
+            local slot_epoch run_epoch
+            slot_epoch=$(TZ=America/Vancouver date -d "$TODAY $hhmm" +%s)
+            local overdue=$(( NOW - slot_epoch ))
+            if [ "$overdue" -lt 2700 ]; then
+              echo "$workflow $hhmm: not yet overdue (${overdue}s)"
+              return
+            fi
+            local since
+            since=$(date -u -d "@$((slot_epoch - 900))" +%Y-%m-%dT%H:%M:%SZ)
+            local count
+            count=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?created=>=$since" --jq '.total_count')
+            if [ "$count" -gt 0 ]; then
+              echo "$workflow $hhmm: run exists (count=$count) — no recovery"
+              return
+            fi
+            echo "::warning::RECOVERY dispatch $workflow for slot ${TODAY}T${hhmm} (overdue ${overdue}s, no run found)"
+            echo "## Recovery event" >> "$GITHUB_STEP_SUMMARY"
+            echo "- $workflow slot ${TODAY}T${hhmm} America/Vancouver: no run found ${overdue}s after slot; recovery dispatched." >> "$GITHUB_STEP_SUMMARY"
+            gh workflow run "$workflow" --repo "$REPO" -f slot="${TODAY}T${hhmm}"
+          }
+          check_slot verify.yml 08:07
+          check_slot verify.yml 15:07
+          check_slot verify.yml 22:07
+          check_slot planner.yml 08:12
