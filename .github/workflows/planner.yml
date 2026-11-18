@@ -1,13 +1,25 @@
 name: Daily planner (pilot — dry run)
 # PILOT MODE: prints the day plan only. It creates no commits, branches or PRs.
 # Production activation requires the owner's explicit approval after the pilot.
+#
+# Scheduling reliability: same dual-phase pattern as verify.yml — the
+# 08:12 America/Vancouver slot is declared at both 15:12 and 16:12 UTC
+# and planner/run_planner_guarded.py applies verify/slotguard.py so
+# only the firing that matches the Vancouver slot prints the plan; the
+# other is an off-phase no-op. Delayed firings are labelled DELAYED;
+# stale executions perform no work.
 on:
   schedule:
-    - cron: "12 8 * * *"
-      timezone: "America/Vancouver"
+    - cron: "12 15,16 * * *"
   workflow_dispatch:
+    inputs:
+      slot:
+        description: "Recovery slot id (YYYY-MM-DDTHH:MM, America/Vancouver)"
+        required: false
+        type: string
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: planner
   cancel-in-progress: false
@@ -23,5 +35,8 @@ jobs:
       - name: Respect emergency stop
         run: |
           if [ -f AUTOMATION_PAUSED ]; then echo "Automation paused by owner."; exit 0; fi
-      - name: Print today's plan (dry run)
-        run: python planner/planner.py
+      - name: Print today's plan (dry run, slot-guarded)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_SLOT: ${{ inputs.slot }}
+        run: python planner/run_planner_guarded.py
