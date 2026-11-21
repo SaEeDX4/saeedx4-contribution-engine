@@ -39,4 +39,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERIFY_SLOT: ${{ inputs.slot }}
-        run: python planner/run_planner_guarded.py
+        run: python -m planner.run_planner_guarded
