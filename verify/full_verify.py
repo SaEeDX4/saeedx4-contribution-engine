@@ -54,11 +54,33 @@ GRAPHQL = (
 )
 
 
-def gh_json(args: list[str]) -> dict:
-    out = subprocess.run(
-        ["gh", "api", *args], capture_output=True, text=True, check=True
+class GhError(RuntimeError):
+    """A gh CLI call failed; carries the captured stderr for diagnosis."""
+
+
+def gh_json(args: list[str], retries: int = 2) -> dict:
+    """Run `gh api ...` and parse JSON. On failure, RETRY (the GitHub
+    GraphQL calendar query is known to fail transiently server-side)
+    and finally raise GhError containing gh's stderr — never swallow
+    the error text (2026-11-21: a bare CalledProcessError hid the
+    actual GitHub error and made the failure undiagnosable)."""
+    last: subprocess.CompletedProcess | None = None
+    for attempt in range(retries + 1):
+        out = subprocess.run(
+            ["gh", "api", *args], capture_output=True, text=True
+        )
+        if out.returncode == 0:
+            return json.loads(out.stdout)
+        last = out
+        if attempt < retries:
+            import time
+
+            time.sleep(5 * (attempt + 1))
+    stderr = (last.stderr or "").strip()[-500:] if last else ""
+    raise GhError(
+        f"gh api {' '.join(args[:1])} failed after {retries + 1} attempts: "
+        f"{stderr or '(no stderr captured)'}"
     )
-    return json.loads(out.stdout)
 
 
 def fetch_calendar() -> tuple[int, dict[date, int]]:
@@ -173,6 +195,16 @@ def main() -> int:
         _emit(report)
         return 0
 
+    try:
+        return _verify_body(report, root, today_van, now_utc)
+    except GhError as exc:
+        report["verdict"] = f"INFRA ERROR — {exc}"
+        report["infra_error"] = str(exc)
+        _emit(report)
+        return 2
+
+
+def _verify_body(report: dict, root: Path, today_van: date, now_utc: datetime) -> int:
     total, counts = fetch_calendar()
     report["contribution_graph"] = {
         "total_last_year": total,
