@@ -50,7 +50,7 @@ NOREPLY = "198836972+SaEeDX4@users.noreply.github.com"
 GRAPHQL = (
     'query { user(login: "SaEeDX4") { contributionsCollection { '
     "contributionCalendar { totalContributions weeks { contributionDays "
-    "{ date contributionCount } } } } }"
+    "{ date contributionCount } } } } } }"
 )
 
 
