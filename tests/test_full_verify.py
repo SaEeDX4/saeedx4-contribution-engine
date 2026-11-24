@@ -38,3 +38,14 @@ def test_gh_json_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda s: None)
     assert full_verify.gh_json(["graphql"], retries=2) == {"ok": True}
     assert calls["n"] == 2
+
+
+def test_graphql_query_braces_balanced():
+    # Regression (2026-11-22): the query shipped with 6 '{' and 5 '}',
+    # so GitHub rejected every call with "Expected NAME, actual: (none)
+    # at [1, 160]" — the failures on Nov 21-22 were a deterministic
+    # syntax error in our own query, not a transient GitHub problem.
+    from verify.full_verify import GRAPHQL
+
+    assert GRAPHQL.count("{") == GRAPHQL.count("}")
+    assert GRAPHQL.rstrip().endswith("}")

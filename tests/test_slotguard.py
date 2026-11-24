@@ -33,10 +33,10 @@ def test_off_phase_is_noop():
     # 12:00 UTC = 05:00 Vancouver: every slot is still in the future.
     m = match_slot(utc(2026, 11, 19, 12, 0), VERIFY_SLOTS)
     assert m is None
-    # 03:00 UTC = 20:00 Vancouver: the day's last slot is 22:07 (future)
-    # and 15:07 is beyond the acceptance window -> stale, no work.
+    # 03:00 UTC = 20:00 Vancouver (previous UTC day boundary): the
+    # latest past slot is 15:07, now classified delayed (same-day rule).
     m = match_slot(utc(2026, 11, 19, 3, 0), VERIFY_SLOTS)
-    assert m is None or m.state in ("off_phase", "stale")
+    assert m is None or m.state in ("off_phase", "stale", "delayed")
 
 
 def test_delayed_within_window():
@@ -46,11 +46,15 @@ def test_delayed_within_window():
     assert m.slot_id == "2026-11-19T08:07"
 
 
-def test_stale_after_window():
-    # 13:30 Vancouver: the 08:07 slot is >180 min past, 15:07 is future.
+def test_late_same_day_is_delayed_not_stale():
+    # Revised rule (2026-11-24): 13:30 Vancouver — the 08:07 slot is
+    # >180 min past, 15:07 is future. The execution RUNS the 08:07
+    # verification as delayed; only cross-day claims are stale.
+    # (Real case: 2026-11-23, 15:07 slot's run arrived 19:52 and was
+    # discarded under the old cliff.)
     m = match_slot(utc(2026, 11, 19, 20, 30), VERIFY_SLOTS)
     assert m.slot_id == "2026-11-19T08:07"
-    assert m.state == "stale"
+    assert m.state == "delayed"
 
 
 def test_recovery_next_day_is_stale():

@@ -22,13 +22,19 @@ fired at all. The defence is layered:
    recovery run carrying the slot id. The guard + a self-check for an
    already-completed run of the same slot make recovery idempotent.
 
-Tolerances (owner directive, 2026-11-18):
+Tolerances (owner directive 2026-11-18, revised 2026-11-24 with the
+owner's "in the end it must work" instruction):
 - ON_TIME:  started within 15 minutes after the slot.
-- DELAYED:  started 15-180 minutes after the slot (still same local
-  day): verification runs and is reported as DELAYED.
-- MISSED:   no execution by slot+180 minutes; watchdog recovery may
-  still dispatch until 23:59 local, after which the slot is recorded
-  MISSED for the day and never executed late.
+- DELAYED:  started more than 15 minutes after the slot but still on
+  the same local day: verification RUNS and the delay is recorded in
+  the report. (The original 180-minute stale cliff was a design error:
+  it conflated "late" with "wrong day". GitHub's scheduler provably
+  delivers some runs hours late; a same-day verification still checks
+  the same day's state, and duplicate suppression — not refusal — is
+  the correct guard. Evidence: 2026-11-23, the 15:07 slot's only run
+  arrived at 19:52 and was discarded unused.)
+- STALE:    reserved for executions claiming a slot of a DIFFERENT
+  local day (cross-day recovery dispatches). Those never execute.
 """
 
 from __future__ import annotations
@@ -99,10 +105,12 @@ def match_slot(
         sid = slot_id_for(today, slot)
         if -EARLY_TOLERANCE <= delay <= ON_TIME_TOLERANCE:
             state = "on_time"
-        elif ON_TIME_TOLERANCE < delay <= ACCEPTANCE_WINDOW:
+        elif delay > ON_TIME_TOLERANCE:
+            # Same local day, however late: the verification still
+            # checks this day's state, so it runs as DELAYED with the
+            # delay recorded. Slots are computed from today's date
+            # only, so no work can leak into another day from here.
             state = "delayed"
-        elif delay > ACCEPTANCE_WINDOW:
-            state = "stale"
         else:
             continue  # slot still in the future beyond early tolerance
         candidate = SlotMatch(sid, slot_at, state, delay)
