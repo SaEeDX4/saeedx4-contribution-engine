@@ -158,7 +158,7 @@ def main() -> int:
     root = Path(os.environ.get("VERIFY_ROOT", ".")).resolve()
     intended = os.environ.get("VERIFY_SLOT") or None
     now_utc = datetime.now(timezone.utc)
-    match = match_slot(now_utc, VERIFY_SLOTS, intended)
+    match = match_slot(now_utc, VERIFY_SLOTS, intended, allow_prev_day_grace=True)
     today_van = now_utc.astimezone(TZ).date()
 
     report: dict = {

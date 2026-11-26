@@ -35,6 +35,16 @@ owner's "in the end it must work" instruction):
   arrived at 19:52 and was discarded unused.)
 - STALE:    reserved for executions claiming a slot of a DIFFERENT
   local day (cross-day recovery dispatches). Those never execute.
+- EVENING GRACE (added 2026-11-26): the day's LAST slot (22:07) has
+  only ~1 hour of same-day recovery runway before midnight, and it
+  was missed two days running (Nov 24-25) when GitHub never created
+  the run and no watchdog firing landed in that short window. A
+  verification execution arriving within 3 hours after midnight may
+  therefore close out YESTERDAY's last slot as DELAYED (delay
+  recorded). Verification is read-only and its classifications are
+  timestamp-based, so a late-night execution still produces a correct
+  report for that slot. The grace applies to verification only, never
+  to the planner, and never beyond yesterday's last slot.
 """
 
 from __future__ import annotations
@@ -51,6 +61,7 @@ PLANNER_SLOTS: tuple[time, ...] = (time(8, 12),)
 ON_TIME_TOLERANCE = timedelta(minutes=15)
 ACCEPTANCE_WINDOW = timedelta(minutes=180)
 EARLY_TOLERANCE = timedelta(minutes=10)
+PREV_DAY_GRACE = timedelta(hours=3)
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,7 @@ def match_slot(
     now_utc: datetime,
     slots: tuple[time, ...],
     intended_slot_id: str | None = None,
+    allow_prev_day_grace: bool = False,
 ) -> SlotMatch | None:
     """Classify an execution.
 
@@ -94,8 +106,22 @@ def match_slot(
                 else:
                     state = "stale"
                 return SlotMatch(intended_slot_id, slot_at, state, delay)
-        # Intended slot is not one of today's slots: it belongs to
-        # another local day. Never execute it.
+        # Intended slot is not one of today's slots. Evening grace:
+        # yesterday's LAST slot may still be claimed within the grace
+        # window after midnight (verification only).
+        if allow_prev_day_grace:
+            yday = today - timedelta(days=1)
+            if intended_slot_id == slot_id_for(yday, slots[-1]):
+                slot_at = datetime.combine(yday, slots[-1], tzinfo=TZ)
+                grace_end = (
+                    datetime.combine(today, time(0, 0), tzinfo=TZ)
+                    + PREV_DAY_GRACE
+                )
+                if slot_at < now < grace_end:
+                    return SlotMatch(
+                        intended_slot_id, slot_at, "delayed", now - slot_at
+                    )
+        # Any other day: never execute it.
         return SlotMatch(intended_slot_id, now, "stale", timedelta(0))
 
     best: SlotMatch | None = None
@@ -116,4 +142,15 @@ def match_slot(
         candidate = SlotMatch(sid, slot_at, state, delay)
         if best is None or slot_at > best.slot_at:
             best = candidate
+    if allow_prev_day_grace and best is None:
+        # Evening grace: before 03:00 local, yesterday's last slot can
+        # still be closed out by a spontaneous firing (see module
+        # docstring). Only when no slot of today matched.
+        grace_end = datetime.combine(today, time(0, 0), tzinfo=TZ) + PREV_DAY_GRACE
+        if now < grace_end:
+            yday = today - timedelta(days=1)
+            slot_at = datetime.combine(yday, slots[-1], tzinfo=TZ)
+            best = SlotMatch(
+                slot_id_for(yday, slots[-1]), slot_at, "delayed", now - slot_at
+            )
     return best
